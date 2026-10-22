@@ -31,12 +31,17 @@ for f in glob.glob(os.path.expanduser('~/.claude/projects/**/*.jsonl'), recursiv
             continue
         replies[key] = {'vals': vals, 'ts': ts, 'model': m.get('model') or 'unknown', 'session': r.get('sessionId')}
 
-tot = {l: {'days': d, **{f: 0 for f in fields}, 'sessions': set(), 'models': {}} for l, d in periods}
+tot = {l: {'days': d, **{f: 0 for f in fields}, 'sessions': set(), 'models': {}, 'replies': 0, 'hours': [0] * 24}
+       for l, d in periods}
 first = None
+daily = {}
 for reply in replies.values():
     t = dt.datetime.fromisoformat(reply['ts'].replace('Z', '+00:00'))
     first = t if first is None or t < first else first
     vals = dict(zip(fields, reply['vals']))
+    local = t.astimezone()
+    day = local.date().isoformat()
+    daily[day] = daily.get(day, 0) + sum(vals.values())
     age = (now - t).days
     for label, lim in periods:
         if lim is None or age < lim:
@@ -44,11 +49,15 @@ for reply in replies.values():
             for k, v in vals.items():
                 p[k] += v
             p['sessions'].add(reply['session'])
+            p['replies'] += 1
+            p['hours'][local.hour] += 1
             p['models'][reply['model']] = p['models'].get(reply['model'], 0) + sum(vals.values())
 out = []
 for label, p in tot.items():
     models = sorted(p['models'].items(), key=lambda kv: -kv[1])
     out.append({'label': label, 'days': p['days'], **{f: p[f] for f in fields},
                 'tokens': sum(p[f] for f in fields), 'sessions': len(p['sessions']),
+                'replies': p['replies'], 'hours': p['hours'],
                 'models': [{'name': n, 'tokens': v} for n, v in models if n != '<synthetic>'][:4]})
-print(json.dumps({'periods': out, 'since': first.date().isoformat() if first else None}))
+print(json.dumps({'periods': out, 'daily': daily, 'today': dt.datetime.now().date().isoformat(),
+                  'since': first.date().isoformat() if first else None}))

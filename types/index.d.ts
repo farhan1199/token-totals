@@ -7,9 +7,14 @@ export type Period = {
   cacheWrite: number
   cacheRead: number
   sessions: number
+  replies: number
+  hours: number[]
   models: { name: string; tokens: number }[]
 }
-export type Totals = { periods: Period[]; since: string | null; checkedAt: string } | { error: string } | null
+export type Totals =
+  | { periods: Period[]; daily: Record<string, number>; today: string; since: string | null; checkedAt: string }
+  | { error: string }
+  | null
 
 declare module 'claude-code' {
   interface PluginState {
