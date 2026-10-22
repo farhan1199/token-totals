@@ -126,7 +126,7 @@ export const register: Register = on => {
 
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
           <Text dimColor size="caption">
-            From Claude Code logs on this Mac{t.since ? ` since ${t.since}` : ''} · updated {t.checkedAt}
+            From Claude Code logs{t.since ? ` since ${t.since}` : ''} · updated {t.checkedAt}
           </Text>
           <Button key="refresh" variant="secondary" onPress={() => void refresh($)}>Refresh</Button>
         </Box>
