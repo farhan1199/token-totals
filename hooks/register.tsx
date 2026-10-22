@@ -14,18 +14,30 @@ const short = (n: number) =>
 
 const pct = (part: number, whole: number) => (whole ? `${Math.round((part / whole) * 100)}%` : '0%')
 
+// `python3` is missing on most Windows machines (or is the Microsoft Store
+// placeholder), where `python` or the `py` launcher is the real one.
+const PYTHONS = [['python3'], ['python'], ['py', '-3']]
+let python: string[] | undefined
+
+const count = async ($: EngineInterface, argv: string[]) => {
+  const { exitCode, stdout, stderr } = await $.process.run(
+    [...argv, '-I', `${$.plugin.root}/scripts/usage.py`],
+    { timeoutMs: 120_000 },
+  )
+  if (exitCode !== 0) throw new Error(stderr.trim() || `exit ${exitCode}`)
+  return JSON.parse(stdout)
+}
+
 const refresh = async ($: EngineInterface) => {
-  let next: Totals
-  try {
-    const { exitCode, stdout, stderr } = await $.process.run(
-      ['python3', '-I', `${$.plugin.root}/scripts/usage.py`],
-      { timeoutMs: 120_000 },
-    )
-    next = exitCode === 0
-      ? { ...JSON.parse(stdout), checkedAt: new Date().toLocaleTimeString() }
-      : { error: stderr.trim() || `exit ${exitCode}` }
-  } catch (err) {
-    next = { error: String(err) }
+  let next: Totals = { error: 'Python 3 was not found. Install it from python.org.' }
+  for (const argv of python ? [python] : PYTHONS) {
+    try {
+      next = { ...(await count($, argv)), checkedAt: new Date().toLocaleTimeString() }
+      python = argv
+      break
+    } catch (err) {
+      if (python) next = { error: String(err) }
+    }
   }
   await update($, totals, () => next)
   return next

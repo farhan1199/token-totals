@@ -31,3 +31,20 @@ test('the /tokens card switches period when a filter is pressed', async ($, on) 
     await ui.unmount()
   }
 })
+
+test('falls back to python when python3 fails, as on Windows', async ($, on) => {
+  const tried: string[] = []
+  on('command.register', () => ({ value: { command: 'tokens' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', (_, e) => {
+    tried.push(e.argv[0]!)
+    return e.argv[0] === 'python3'
+      ? { value: { exitCode: 9009, stdout: '', stderr: 'Python was not found' } }
+      : { value: { exitCode: 0, stdout: STDOUT, stderr: '' } }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ran = await $.command.run({ command: 'tokens', args: '' })
+  expect(JSON.stringify(ran)).toContain('5.0M')
+  expect(tried.slice(0, 2)).toEqual(['python3', 'python'])
+})
