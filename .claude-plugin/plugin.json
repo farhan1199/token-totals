@@ -1,0 +1,7 @@
+{
+  "name": "token-totals",
+  "version": "0.1.0",
+  "description": "Your Claude Code token totals for the last 7 days, 30 days and all time",
+  "author": { "name": "farhan1199" },
+  "repository": "https://github.com/farhan1199/token-totals"
+}
