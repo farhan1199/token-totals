@@ -31,19 +31,18 @@ test('the /tokens card switches period when a filter is pressed', async ($, on) 
     expect((await ui.find({ type: 'Text', text: /^11 AM$/ }))?.text).toBe('11 AM')
     expect((await ui.find({ type: 'Text', text: /^Opus 5\.5$/ }))?.text).toBe('Opus 5.5')
     if (surface === 'desktop') {
-      // A GitHub-style SVG of the chosen period; hovering a square shows its day's line.
+      // A GitHub-style SVG of ten months, the same for every filter; hovering a
+      // square of the logs (Jun 17 on) shows its day's line.
       const source = async () => String((await ui.find({ type: 'Svg' }))?.props.source)
-      const squares = async () => (await source()).match(/<rect id=/g)?.length
+      const hoverable = async () => (await source()).match(/<rect id=/g)?.length
       expect(await source()).toContain('Wed, Oct 21, 2026 · <tspan class="v">600.0K tokens</tspan>')
       expect(await source()).toMatch(/#c\d+:hover~#t\d+/)
       expect(await source()).toContain('>Mon<')
-      expect(await squares()).toBe(30)
-      expect(await source()).not.toContain('>Jul<')
+      expect(await source()).toContain('>Jan<')
+      expect(await hoverable()).toBe(128)
       await ui.press({ key: '7 days' })
-      expect(await squares()).toBe(7)
-      await ui.press({ key: 'All time' })
-      expect(await squares()).toBe(128)
-      expect(await source()).toContain('>Jul<')
+      expect(await hoverable()).toBe(128)
+      expect(await source()).toContain('>Jan<')
       await ui.press({ key: '30 days' })
     } else {
       // The day's hover card is hidden until hovered, so check its cell is drawn.

@@ -82,28 +82,21 @@ const dayName = (iso: string) => {
   return `${WEEKDAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`
 }
 
-// Weeks as columns, Sunday to Saturday, from the week of `first` to the week of
-// `today`, the last `max` of them.
-const weeks = (first: string, today: string, max: number) => {
-  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay()
-  const end = addDays(today, 6 - weekday(today))
-  const span = Math.round((Date.parse(end) - Date.parse(addDays(first, -weekday(first)))) / 86_400_000) + 1
-  const count = Math.min(max, Math.max(1, span / 7))
+// `count` weeks as columns, Sunday to Saturday, ending with the week of `today`.
+const weeks = (today: string, count: number) => {
+  const end = addDays(today, 6 - new Date(`${today}T00:00:00Z`).getUTCDay())
   return Array.from({ length: count }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => addDays(end, -(count - 1 - w) * 7 - (6 - d))))
 }
 
-// GitHub's contribution graph over the chosen period: small rounded squares, months
-// across the top, Mon/Wed/Fri down the side, the legend under it, and the hovered
-// day's line above, at the right. Gray at partial opacity reads on light and dark
-// alike, since the SVG cannot see the app's theme.
-// The SVG is always WIDTH wide, so the readout and legend stay put across filters;
-// squares grow from 12px (44 weeks, about ten months) to 14px as the period shortens.
-const WIDTH = 687
+// GitHub's contribution graph: ten months of small rounded squares, months across the
+// top, Mon/Wed/Fri down the side, the legend under it, and the hovered day's line
+// above, at the right. Gray at partial opacity reads on light and dark alike, since
+// the SVG cannot see the app's theme.
+const CELL = 12
+// Weeks the SVG shows: about ten months, so 12px squares fit a ~700px card unscaled.
 const SVG_WEEKS = 44
-const GAP = 3
-const MIN_CELL = 12
-const MAX_CELL = 14
+const STEP = CELL + 3
 const LEFT = 30
 const TOP = 34
 const EMPTY = 'rgba(140,140,140,0.18)'
@@ -113,26 +106,23 @@ const LABEL = 'rgba(140,140,140,0.95)'
 
 const heatmap = (
   grid: string[][],
-  shows: (day: string) => boolean,
+  today: string,
   fill: (day: string) => string,
-  readout: (day: string) => [when: string, tokens: string],
+  readout: (day: string) => [when: string, tokens: string] | undefined,
 ) => {
-  const CELL = Math.max(MIN_CELL, Math.min(MAX_CELL, Math.floor((WIDTH - LEFT + GAP) / grid.length) - GAP))
-  const STEP = CELL + GAP
-  const KEY = MIN_CELL + GAP
-  const gridBottom = TOP + 7 * STEP - GAP
-  const width = WIDTH
-  const height = gridBottom + 8 + MIN_CELL
+  const gridBottom = TOP + 7 * STEP - 3
+  const width = LEFT + grid.length * STEP - 3
+  const height = gridBottom + 8 + CELL
   const text = (x: number, y: number, s: string, anchor = 'start') =>
     `<text x="${x}" y="${y}" text-anchor="${anchor}">${s}</text>`
 
   const months: string[] = []
-  let lastAt = -Infinity
+  let lastAt = -3
   grid.forEach((week, w) => {
     const month = Number(week[0]!.slice(5, 7))
     if (w > 0 && month === Number(grid[w - 1]![0]!.slice(5, 7))) return
-    // A month label needs about 30px; drop the first if the next comes sooner.
-    if ((w - lastAt) * STEP < 30) months.pop()
+    // A month label needs about three columns; drop the first if the next comes sooner.
+    if (w - lastAt < 3) months.pop()
     months.push(text(LEFT + w * STEP, TOP - 6, MONTHS[month - 1]!))
     lastAt = w
   })
@@ -140,22 +130,25 @@ const heatmap = (
   // Hovering square #cN shows line #tN by CSS alone (a sibling selector): the SVG is
   // drawn in a frame without script, and the hover scopes of Boxes cannot reach inside it.
   const lines: string[] = []
-  const cells = grid.flatMap((week, w) => week.filter(shows).map(day => {
+  const cells = grid.flatMap((week, w) => week.filter(day => day <= today).map(day => {
     const d = new Date(`${day}T00:00:00Z`).getUTCDay()
-    const [when, tokens] = readout(day)
-    lines.push(`<text id="t${lines.length}" class="r" x="${width}" y="12" text-anchor="end">`
-      + `${when} · <tspan class="v">${tokens}</tspan></text>`)
-    return `<rect id="c${lines.length - 1}" x="${LEFT + w * STEP}" y="${TOP + d * STEP}" width="${CELL}" height="${CELL}" rx="${CELL > 14 ? 3 : 2}" fill="${fill(day)}"/>`
+    const line = readout(day)
+    const id = line ? ` id="c${lines.length}"` : ''
+    if (line) {
+      lines.push(`<text id="t${lines.length}" class="r" x="${width}" y="12" text-anchor="end">`
+        + `${line[0]} · <tspan class="v">${line[1]}</tspan></text>`)
+    }
+    return `<rect${id} x="${LEFT + w * STEP}" y="${TOP + d * STEP}" width="${CELL}" height="${CELL}" rx="2" fill="${fill(day)}"/>`
   }))
   const shown = lines.map((_, i) => `#c${i}:hover~#t${i}`).join(',')
   const swatches = [EMPTY, ...SVG_HEAT]
-  const legendX = width - swatches.length * KEY - 30
+  const legendX = width - swatches.length * STEP - 30
   const legendY = gridBottom + 8
   const legend = [
-    text(legendX - 6, legendY + MIN_CELL - 2, 'Less', 'end'),
+    text(legendX - 6, legendY + CELL - 2, 'Less', 'end'),
     ...swatches.map((color, i) =>
-      `<rect class="key" x="${legendX + i * KEY}" y="${legendY}" width="${MIN_CELL}" height="${MIN_CELL}" rx="2" fill="${color}"/>`),
-    text(legendX + swatches.length * KEY + 3, legendY + MIN_CELL - 2, 'More'),
+      `<rect class="key" x="${legendX + i * STEP}" y="${legendY}" width="${CELL}" height="${CELL}" rx="2" fill="${color}"/>`),
+    text(legendX + swatches.length * STEP + 3, legendY + CELL - 2, 'More'),
   ]
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
@@ -194,18 +187,22 @@ export const register: Register = on => {
     const first = p.days ? addDays(t.today, 1 - p.days) : (t.since ?? t.today)
     const inPeriod = (day: string) => day >= first && day <= t.today
     const activeDays = Object.entries(t.daily).filter(([day, n]) => n > 0 && inPeriod(day)).length
-    // The grid spans the chosen period, a week per column; days outside it are not drawn.
+    // The grid is the same for every filter (ten months on SVG surfaces, all the logs on the
+    // terminal); only days in the chosen period are colored.
+    const since = t.since ?? t.today
+    const inLogs = (day: string) => day >= since && day <= t.today
+    const spanDays = Math.round((Date.parse(t.today) - Date.parse(since)) / 86_400_000) + 1
     const peak = p.hours.indexOf(Math.max(...p.hours))
     const top = p.models[0]
-    const grid = weeks(first, t.today, Svg ? SVG_WEEKS : MAX_WEEKS)
+    const grid = weeks(t.today, Svg ? SVG_WEEKS : Math.min(MAX_WEEKS, Math.ceil(spanDays / 7) + 1))
     const busiest = Math.max(1, ...grid.flat().filter(inPeriod).map(day => t.daily[day] ?? 0))
     const heat = (day: string, scale: string[]) => {
       const n = t.daily[day] ?? 0
       if (!inPeriod(day) || n === 0) return undefined
       return scale[Math.min(scale.length - 1, Math.floor((n / busiest) * scale.length))]
     }
-    const readout = (day: string): [string, string] =>
-      [dayName(day), t.daily[day] ? `${short(t.daily[day])} tokens` : 'No activity']
+    const readout = (day: string): [string, string] | undefined =>
+      inLogs(day) ? [dayName(day), t.daily[day] ? `${short(t.daily[day])} tokens` : 'No activity'] : undefined
     const tiles: [string, string][] = [
       ['Sessions', p.sessions.toLocaleString()],
       ['Replies', p.replies.toLocaleString()],
@@ -252,8 +249,8 @@ export const register: Register = on => {
           <Box flexDirection="column" gap="xs">
             <Text weight="semibold" bold>Activity</Text>
             <Svg
-              source={heatmap(grid, inPeriod, day => heat(day, SVG_HEAT) ?? EMPTY, readout)}
-              alt={`Daily tokens over ${p.label === 'All time' ? 'all time' : `the last ${p.label}`}, ${activeDays} active days`}
+              source={heatmap(grid, t.today, day => heat(day, SVG_HEAT) ?? EMPTY, readout)}
+              alt={`Daily tokens over the last ten months, ${activeDays} active days in the chosen period`}
               isInteractive
             />
           </Box>
@@ -263,7 +260,7 @@ export const register: Register = on => {
                 a card over the grid would paint under the columns drawn after it. */}
             <Box flexDirection="row" justifyContent="space-between" alignItems="center">
               <Text weight="semibold" bold>Activity</Text>
-              {grid.flat().filter(inPeriod).map(day => (
+              {grid.flat().filter(inLogs).map(day => (
                 <Box key={`info-${day}`} display="none" hover={{ scope: `day-${day}`, display: 'flex' }}>
                   <Text dimColor size="footnote">{dayName(day)} · </Text>
                   <Text weight="semibold" bold tabular size="footnote">
@@ -284,8 +281,8 @@ export const register: Register = on => {
                       key={day}
                       width={2}
                       height={1}
-                      backgroundColor={heat(day, HEAT) ?? (inPeriod(day) ? 'subtle' : undefined)}
-                      hover={inPeriod(day) ? { scope: `day-${day}`, backgroundColor: 'claude' } : undefined}
+                      backgroundColor={heat(day, HEAT) ?? (inLogs(day) ? 'subtle' : undefined)}
+                      hover={inLogs(day) ? { scope: `day-${day}`, backgroundColor: 'claude' } : undefined}
                     />
                   ))}
                 </Box>
