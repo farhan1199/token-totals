@@ -82,12 +82,89 @@ const dayName = (iso: string) => {
   return `${WEEKDAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`
 }
 
-// Weeks as columns, Sunday to Saturday, ending with the week of `today`.
-const weeks = (today: string, days: number) => {
-  const end = addDays(today, 6 - new Date(`${today}T00:00:00Z`).getUTCDay())
-  const count = Math.min(MAX_WEEKS, Math.max(1, Math.ceil(days / 7) + 1))
+// Weeks as columns, Sunday to Saturday, from the week of `first` to the week of
+// `today`, the last `max` of them.
+const weeks = (first: string, today: string, max: number) => {
+  const weekday = (iso: string) => new Date(`${iso}T00:00:00Z`).getUTCDay()
+  const end = addDays(today, 6 - weekday(today))
+  const span = Math.round((Date.parse(end) - Date.parse(addDays(first, -weekday(first)))) / 86_400_000) + 1
+  const count = Math.min(max, Math.max(1, span / 7))
   return Array.from({ length: count }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => addDays(end, -(count - 1 - w) * 7 - (6 - d))))
+}
+
+// GitHub's contribution graph over the chosen period: small rounded squares, months
+// across the top, Mon/Wed/Fri down the side, the legend under it, and the hovered
+// day's line above, at the right. Gray at partial opacity reads on light and dark
+// alike, since the SVG cannot see the app's theme.
+// The SVG is always WIDTH wide, so the readout and legend stay put across filters;
+// squares grow from 12px (44 weeks, about ten months) to 14px as the period shortens.
+const WIDTH = 687
+const SVG_WEEKS = 44
+const GAP = 3
+const MIN_CELL = 12
+const MAX_CELL = 14
+const LEFT = 30
+const TOP = 34
+const EMPTY = 'rgba(140,140,140,0.18)'
+// Claude's orange at rising opacity, so the faintest day is also the lightest on either theme.
+const SVG_HEAT = [0.3, 0.5, 0.75, 1].map(a => `rgba(217,119,87,${a})`)
+const LABEL = 'rgba(140,140,140,0.95)'
+
+const heatmap = (
+  grid: string[][],
+  shows: (day: string) => boolean,
+  fill: (day: string) => string,
+  readout: (day: string) => [when: string, tokens: string],
+) => {
+  const CELL = Math.max(MIN_CELL, Math.min(MAX_CELL, Math.floor((WIDTH - LEFT + GAP) / grid.length) - GAP))
+  const STEP = CELL + GAP
+  const KEY = MIN_CELL + GAP
+  const gridBottom = TOP + 7 * STEP - GAP
+  const width = WIDTH
+  const height = gridBottom + 8 + MIN_CELL
+  const text = (x: number, y: number, s: string, anchor = 'start') =>
+    `<text x="${x}" y="${y}" text-anchor="${anchor}">${s}</text>`
+
+  const months: string[] = []
+  let lastAt = -Infinity
+  grid.forEach((week, w) => {
+    const month = Number(week[0]!.slice(5, 7))
+    if (w > 0 && month === Number(grid[w - 1]![0]!.slice(5, 7))) return
+    // A month label needs about 30px; drop the first if the next comes sooner.
+    if ((w - lastAt) * STEP < 30) months.pop()
+    months.push(text(LEFT + w * STEP, TOP - 6, MONTHS[month - 1]!))
+    lastAt = w
+  })
+  const weekdays = [1, 3, 5].map(d => text(LEFT - 6, TOP + d * STEP + CELL - 2, WEEKDAYS[d]!, 'end'))
+  // Hovering square #cN shows line #tN by CSS alone (a sibling selector): the SVG is
+  // drawn in a frame without script, and the hover scopes of Boxes cannot reach inside it.
+  const lines: string[] = []
+  const cells = grid.flatMap((week, w) => week.filter(shows).map(day => {
+    const d = new Date(`${day}T00:00:00Z`).getUTCDay()
+    const [when, tokens] = readout(day)
+    lines.push(`<text id="t${lines.length}" class="r" x="${width}" y="12" text-anchor="end">`
+      + `${when} · <tspan class="v">${tokens}</tspan></text>`)
+    return `<rect id="c${lines.length - 1}" x="${LEFT + w * STEP}" y="${TOP + d * STEP}" width="${CELL}" height="${CELL}" rx="${CELL > 14 ? 3 : 2}" fill="${fill(day)}"/>`
+  }))
+  const shown = lines.map((_, i) => `#c${i}:hover~#t${i}`).join(',')
+  const swatches = [EMPTY, ...SVG_HEAT]
+  const legendX = width - swatches.length * KEY - 30
+  const legendY = gridBottom + 8
+  const legend = [
+    text(legendX - 6, legendY + MIN_CELL - 2, 'Less', 'end'),
+    ...swatches.map((color, i) =>
+      `<rect class="key" x="${legendX + i * KEY}" y="${legendY}" width="${MIN_CELL}" height="${MIN_CELL}" rx="2" fill="${color}"/>`),
+    text(legendX + swatches.length * KEY + 3, legendY + MIN_CELL - 2, 'More'),
+  ]
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`
+    + `<style>text{font:10px -apple-system,system-ui,sans-serif;fill:${LABEL}}`
+    + `rect[id]:hover{stroke:#d97757;stroke-width:1.5}`
+    + `.r{display:none;font-size:11px}.v{font-weight:600;fill:#d97757}`
+    + (shown ? `${shown}{display:inline}` : '') + '</style>'
+    + months.join('') + weekdays.join('') + cells.join('') + lines.join('') + legend.join('')
+    + '</svg>'
 }
 
 export const register: Register = on => {
@@ -107,27 +184,28 @@ export const register: Register = on => {
     const t = await read($, totals)
     if (!t || 'error' in t || e.props.isErrored) return next(e)
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button } = elements
+    // Surfaces that draw SVG get GitHub-style small squares; the terminal gets a box grid.
+    const Svg = e.surface !== 'terminal' && 'Svg' in elements ? elements.Svg : undefined
     const choice = await read($, selected)
     const p: Period = t.periods.find(one => one.label === choice) ?? t.periods[t.periods.length - 1]!
 
     const first = p.days ? addDays(t.today, 1 - p.days) : (t.since ?? t.today)
     const inPeriod = (day: string) => day >= first && day <= t.today
     const activeDays = Object.entries(t.daily).filter(([day, n]) => n > 0 && inPeriod(day)).length
-    // The grid always spans all the logs, so it fills the card the same way for every filter;
-    // only days in the chosen period are colored.
-    const since = t.since ?? t.today
-    const inLogs = (day: string) => day >= since && day <= t.today
-    const spanDays = Math.round((Date.parse(t.today) - Date.parse(since)) / 86_400_000) + 1
+    // The grid spans the chosen period, a week per column; days outside it are not drawn.
     const peak = p.hours.indexOf(Math.max(...p.hours))
     const top = p.models[0]
-    const grid = weeks(t.today, spanDays)
+    const grid = weeks(first, t.today, Svg ? SVG_WEEKS : MAX_WEEKS)
     const busiest = Math.max(1, ...grid.flat().filter(inPeriod).map(day => t.daily[day] ?? 0))
-    const heat = (day: string) => {
+    const heat = (day: string, scale: string[]) => {
       const n = t.daily[day] ?? 0
       if (!inPeriod(day) || n === 0) return undefined
-      return HEAT[Math.min(HEAT.length - 1, Math.floor((n / busiest) * HEAT.length))]
+      return scale[Math.min(scale.length - 1, Math.floor((n / busiest) * scale.length))]
     }
+    const readout = (day: string): [string, string] =>
+      [dayName(day), t.daily[day] ? `${short(t.daily[day])} tokens` : 'No activity']
     const tiles: [string, string][] = [
       ['Sessions', p.sessions.toLocaleString()],
       ['Replies', p.replies.toLocaleString()],
@@ -170,40 +248,56 @@ export const register: Register = on => {
           </Box>
         ))}
 
-        <Box flexDirection="column" gap="xs">
-          {/* Hovering a day reveals its line here, beside the heading, by a shared hover scope:
-              a card over the grid would paint under the columns drawn after it. */}
-          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        {Svg ? (
+          <Box flexDirection="column" gap="xs">
             <Text weight="semibold" bold>Activity</Text>
-            {grid.flat().filter(inLogs).map(day => (
-              <Box key={`info-${day}`} display="none" hover={{ scope: `day-${day}`, display: 'flex' }}>
-                <Text dimColor size="footnote">{dayName(day)} · </Text>
-                <Text weight="semibold" bold tabular size="footnote">
-                  {t.daily[day] ? `${short(t.daily[day])} tokens` : 'No activity'}
-                </Text>
+            <Svg
+              source={heatmap(grid, inPeriod, day => heat(day, SVG_HEAT) ?? EMPTY, readout)}
+              alt={`Daily tokens over ${p.label === 'All time' ? 'all time' : `the last ${p.label}`}, ${activeDays} active days`}
+              isInteractive
+            />
+          </Box>
+        ) : (
+          <Box flexDirection="column" gap="xs">
+            {/* Hovering a day reveals its line here, beside the heading, by a shared hover scope:
+                a card over the grid would paint under the columns drawn after it. */}
+            <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+              <Text weight="semibold" bold>Activity</Text>
+              {grid.flat().filter(inPeriod).map(day => (
+                <Box key={`info-${day}`} display="none" hover={{ scope: `day-${day}`, display: 'flex' }}>
+                  <Text dimColor size="footnote">{dayName(day)} · </Text>
+                  <Text weight="semibold" bold tabular size="footnote">
+                    {t.daily[day] ? `${short(t.daily[day])} tokens` : 'No activity'}
+                  </Text>
+                </Box>
+              ))}
+            </Box>
+            {/* Two columns by one row is about square in a terminal cell. */}
+            <Box flexDirection="row" gap="xs">
+              <Box flexDirection="column" width={4}>
+                {WEEKDAYS.map((name, d) => <Text key={name} dimColor>{d % 2 ? name : ' '}</Text>)}
               </Box>
-            ))}
+              {grid.map((week, w) => (
+                <Box key={`w${w}`} flexDirection="column">
+                  {week.map(day => (
+                    <Box
+                      key={day}
+                      width={2}
+                      height={1}
+                      backgroundColor={heat(day, HEAT) ?? (inPeriod(day) ? 'subtle' : undefined)}
+                      hover={inPeriod(day) ? { scope: `day-${day}`, backgroundColor: 'claude' } : undefined}
+                    />
+                  ))}
+                </Box>
+              ))}
+            </Box>
+            <Box flexDirection="row" gap="xs" alignItems="center">
+              <Text dimColor size="caption">Less</Text>
+              {HEAT.map(color => <Box key={color} width={2} height={1} backgroundColor={color} />)}
+              <Text dimColor size="caption">More</Text>
+            </Box>
           </Box>
-          <Box flexDirection="row" gap="xs" width="100%">
-            {grid.map((week, w) => (
-              <Box key={`w${w}`} flexDirection="column" gap="xs" flexGrow={1} width={1}>
-                {week.map(day => (
-                  <Box
-                    key={day}
-                    height={2}
-                    backgroundColor={heat(day) ?? (inLogs(day) ? 'subtle' : undefined)}
-                    hover={inLogs(day) ? { scope: `day-${day}`, backgroundColor: 'claude' } : undefined}
-                  />
-                ))}
-              </Box>
-            ))}
-          </Box>
-          <Box flexDirection="row" gap="xs" alignItems="center">
-            <Text dimColor size="caption">Less</Text>
-            {HEAT.map(color => <Box key={color} width={2} height={1} backgroundColor={color} />)}
-            <Text dimColor size="caption">More</Text>
-          </Box>
-        </Box>
+        )}
 
         <Box flexDirection="column" gap="xs">
           <Text weight="semibold" bold>Where the tokens went</Text>
